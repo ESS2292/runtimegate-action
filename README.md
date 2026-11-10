@@ -118,6 +118,10 @@ Questions and bug reports: [open an issue](https://github.com/ESS2292/runtimegat
 
 - Initial public release of RuntimeGate Lite.
 
+## Related
+
+RuntimeGate checks whether runtime version pins agree. For missing environment variables, use the free [EnvGate Lite Action](https://github.com/ESS2292/envgate-action). For mixed lockfiles or an unfrozen install in CI, use the free [LockGate Lite Action](https://github.com/ESS2292/lockgate-action).
+
 ## License
 
 MIT. Copyright 2026 Emilio Straubel.
