@@ -76,6 +76,7 @@ function run(env = process.env, io = {}) {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  const enginesScopeRaw = (getInput('engines-scope', env) || 'workspace').toLowerCase();
   const root = path.resolve(cwd, rootInput);
 
   const failSetup = (msg) => {
@@ -97,8 +98,12 @@ function run(env = process.env, io = {}) {
   if (!stat.isDirectory()) {
     return failSetup(`Scan root is not a directory: ${rootInput}`);
   }
+  if (enginesScopeRaw !== 'workspace' && enginesScopeRaw !== 'all' && enginesScopeRaw !== 'global') {
+    return failSetup(`Invalid engines-scope "${enginesScopeRaw}". Use "workspace" or "all".`);
+  }
+  const enginesScope = enginesScopeRaw === 'global' ? 'all' : enginesScopeRaw;
 
-  const result = runCheck({ root, langs: ['node'], eol, ignore });
+  const result = runCheck({ root, langs: ['node'], eol, ignore, enginesScope });
   const errors = result.findings.filter((f) => f.severity === 'error');
   const warnings = result.findings.filter((f) => f.severity === 'warning');
   const codes = [...new Set(errors.map((f) => f.code))].join(',');

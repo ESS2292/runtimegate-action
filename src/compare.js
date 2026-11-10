@@ -12,11 +12,12 @@ const SEV_WARNING = 'warning';
 function analyze(collected, options = {}) {
   const checkEol = Boolean(options.eol);
   const now = options.now || new Date();
+  const enginesScope = normalizeEnginesScope(options.enginesScope);
   const findings = [];
   const byLang = groupBy(collected.declarations, (d) => d.lang);
 
   for (const [lang, decls] of Object.entries(byLang)) {
-    findings.push(...analyzeLang(lang, decls, { checkEol, now }));
+    findings.push(...analyzeLang(lang, decls, { checkEol, now, enginesScope }));
   }
 
   const errors = findings.filter((f) => f.severity === SEV_ERROR);
@@ -34,7 +35,7 @@ function analyze(collected, options = {}) {
   };
 }
 
-function analyzeLang(lang, decls, { checkEol, now }) {
+function analyzeLang(lang, decls, { checkEol, now, enginesScope }) {
   const findings = [];
   const pins = decls.filter((d) => d.kind === 'pin' && !d.matrix);
   const matrixPins = decls.filter((d) => d.kind === 'pin' && d.matrix);
@@ -83,6 +84,17 @@ function analyzeLang(lang, decls, { checkEol, now }) {
   }
 
   // 2. Pins (including matrix entries) vs declared ranges.
+  // By default a range only applies to pins in the same workspace (the
+  // directory that declared the range). GitHub workflow files are treated
+  // as repo-root. Pass enginesScope "all" to compare every range to every pin.
+  const scopeAll = enginesScope === 'all';
+  const workspaces = new Set(ranges.map((r) => declarationDir(r.file)));
+
+  const pinsForRange = (range) =>
+    pins.concat(matrixPins).filter((pin) =>
+      scopeAll || nearestWorkspace(pin.file, workspaces) === declarationDir(range.file)
+    );
+
   for (const range of ranges) {
     if (!rangeLooksValid(range.raw)) {
       findings.push({
@@ -94,7 +106,7 @@ function analyzeLang(lang, decls, { checkEol, now }) {
       });
       continue;
     }
-    const toCheck = pins.concat(matrixPins);
+    const toCheck = pinsForRange(range);
     for (const pin of toCheck) {
       const result = pinSatisfiesRange(pin, range.raw);
       if (!result.ok) {
@@ -109,14 +121,15 @@ function analyzeLang(lang, decls, { checkEol, now }) {
     }
   }
 
-  // 3. Range present but no pins at all (except version-file refs).
-  if (ranges.length && pins.length === 0 && matrixPins.length === 0) {
+  // 3. Range present but no in-scope pins (except version-file refs).
+  const rangesWithoutPins = ranges.filter((range) => pinsForRange(range).length === 0);
+  if (rangesWithoutPins.length) {
     findings.push({
       severity: SEV_WARNING,
       code: 'range-without-pin',
       lang,
-      message: `${displayLang(lang)} has a version range (${ranges.map((r) => r.source).join(', ')}) but no concrete pin was found in a version file, Dockerfile, or CI workflow.`,
-      declarations: ranges,
+      message: `${displayLang(lang)} has a version range (${rangesWithoutPins.map((r) => `${r.source} in ${r.file}`).join(', ')}) but no concrete pin was found in that workspace.`,
+      declarations: rangesWithoutPins,
     });
   }
 
@@ -240,6 +253,43 @@ function seriesLabel(lang) {
   return lang === 'node' ? 'major version' : 'major.minor series';
 }
 
+function normalizeEnginesScope(value) {
+  const v = String(value == null ? 'workspace' : value).trim().toLowerCase();
+  if (v === 'all' || v === 'global') return 'all';
+  return 'workspace';
+}
+
+function declarationDir(file) {
+  const norm = String(file || '').replace(/\\/g, '/');
+  const i = norm.lastIndexOf('/');
+  return i === -1 ? '' : norm.slice(0, i);
+}
+
+function parentDir(dir) {
+  if (!dir) return '';
+  const i = dir.lastIndexOf('/');
+  return i === -1 ? '' : dir.slice(0, i);
+}
+
+function isGithubWorkflow(file) {
+  const norm = String(file || '').replace(/\\/g, '/');
+  return /(^|\/)\.github\//.test(norm);
+}
+
+/**
+ * Workspace that owns a pin. Nested package.json / pyproject ranges define
+ * workspaces; .github workflow files belong to the repo root.
+ */
+function nearestWorkspace(file, workspaces) {
+  if (isGithubWorkflow(file)) return workspaces.has('') ? '' : '';
+  let dir = declarationDir(file);
+  while (true) {
+    if (workspaces.has(dir)) return dir;
+    if (!dir) return '';
+    dir = parentDir(dir);
+  }
+}
+
 function unique(arr) {
   return [...new Set(arr)];
 }
@@ -254,4 +304,11 @@ function groupBy(arr, fn) {
   return out;
 }
 
-module.exports = { analyze, SEV_ERROR, SEV_WARNING };
+module.exports = {
+  analyze,
+  SEV_ERROR,
+  SEV_WARNING,
+  normalizeEnginesScope,
+  nearestWorkspace,
+  declarationDir,
+};

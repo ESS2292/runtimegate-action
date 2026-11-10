@@ -10,12 +10,14 @@ const { analyze } = require('./compare');
  * @param {string[]} [options.langs]
  * @param {boolean} [options.eol]
  * @param {Date} [options.now]
+ * @param {string} [options.enginesScope] "workspace" (default) or "all"
  */
 function runCheck(options) {
   const collected = scan(options.root, { langs: options.langs, ignore: options.ignore });
   return analyze(collected, {
     eol: Boolean(options.eol),
     now: options.now || new Date(),
+    enginesScope: options.enginesScope,
   });
 }
 

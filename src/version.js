@@ -26,8 +26,9 @@ function stripTagSuffix(raw) {
   s = s.replace(/^v/i, '');
   // Drop digest if present
   s = s.split('@')[0];
-  // Keep the leading dotted numeric version; drop -alpine, -slim, -bookworm, etc.
-  const m = s.match(/^(\d+(?:\.\d+){0,3})(?:[-_].*)?$/);
+  // Keep the leading dotted numeric version, including GitHub-style 20.x / 20.19.x;
+  // drop -alpine, -slim, -bookworm, etc.
+  const m = s.match(/^(\d+(?:\.(?:\d+|x|X|\*)){0,3})(?:[-_].*)?$/);
   if (m) return m[1];
   return s;
 }
@@ -36,16 +37,28 @@ function stripTagSuffix(raw) {
  * Parse a numeric version like 20, 20.11, 20.11.1, v22.11.0.
  * @returns {{major:number, minor:number|null, patch:number|null, raw:string}|null}
  */
+function isWildcardPart(p) {
+  return p !== undefined && p !== null && /^[xX*]$/.test(p);
+}
+
 function parseNumericVersion(input) {
   if (input == null) return null;
   const cleaned = stripTagSuffix(input);
-  const m = cleaned.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?$/);
+  const m = cleaned.match(/^(\d+)(?:\.(\d+|x|X|\*))?(?:\.(\d+|x|X|\*))?(?:\.(\d+|x|X|\*))?$/);
   if (!m) return null;
+  const wildcard = isWildcardPart(m[2]) || isWildcardPart(m[3]) || isWildcardPart(m[4]);
+  let minor = null;
+  let patch = null;
+  if (m[2] !== undefined && !isWildcardPart(m[2])) {
+    minor = Number(m[2]);
+    if (m[3] !== undefined && !isWildcardPart(m[3])) patch = Number(m[3]);
+  }
   return {
     major: Number(m[1]),
-    minor: m[2] !== undefined ? Number(m[2]) : null,
-    patch: m[3] !== undefined ? Number(m[3]) : null,
+    minor,
+    patch,
     raw: String(input).trim(),
+    wildcard,
   };
 }
 
@@ -134,8 +147,9 @@ function formatVer(v) {
 /**
  * A tiny engines-style range checker.
  * Supports: exact, >= > <= <, ^, ~, ||, and space/comma-separated AND.
- * Not a complete npm semver implementation (no hyphens, no x-ranges like 20.x,
- * no prerelease tags).
+ * Not a complete npm semver implementation (no hyphens, no prerelease tags).
+ * Pin values such as 20.x are handled in parseNumericVersion; engines
+ * comparators here are still exact / >= / ^ / ~ style.
  */
 function parseRangeComparator(token) {
   const t = token.trim();
@@ -158,12 +172,23 @@ function splitOr(range) {
 }
 
 function splitAnd(clause) {
-  // commas or whitespace
-  return clause
+  // commas or whitespace. Join a bare operator with the next token so
+  // ">= 20" (common in package.json engines) is treated as ">=20".
+  const tokens = clause
     .trim()
     .split(/[,\s]+/)
     .map((s) => s.trim())
     .filter(Boolean);
+  const out = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (/^(>=|>|<=|<|=|~|\^)$/.test(tokens[i]) && tokens[i + 1]) {
+      out.push(tokens[i] + tokens[i + 1]);
+      i += 1;
+    } else {
+      out.push(tokens[i]);
+    }
+  }
+  return out;
 }
 
 function versionSatisfiesComparators(point, comparators) {
@@ -244,6 +269,11 @@ function pinSatisfiesRange(pin, rangeText) {
     return { ok: lo, reason: lo ? null : 'unsatisfied' };
   }
   const hi = pointSatisfiesRange(hiPoint, rangeText);
+  // GitHub Actions 20.x / 20.19.x resolves to the latest release on that
+  // line, so only the high end of the pin must satisfy the range.
+  if (pin.wildcard) {
+    return { ok: hi, reason: hi ? null : 'unsatisfied' };
+  }
   if (lo && hi) return { ok: true, reason: null };
   return { ok: false, reason: 'unsatisfied-or-loose' };
 }

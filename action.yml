@@ -17,6 +17,10 @@ inputs:
     description: "Comma-separated relative path prefixes to skip (for example 'examples,docs/fixtures')."
     required: false
     default: ""
+  engines-scope:
+    description: "How to compare package.json engines ranges to pins. 'workspace' (default) only compares a range to pins in the same package directory; GitHub workflows belong to the repo root. 'all' compares every range to every pin."
+    required: false
+    default: "workspace"
 outputs:
   ok:
     description: "'true' if the check passed, otherwise 'false'."

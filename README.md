@@ -53,6 +53,7 @@ jobs:
 | `root` | `.` | Project directory to scan, relative to the workspace |
 | `eol` | `false` | If `true`, also fail when a Node.js pin is past official end of support |
 | `ignore` | (empty) | Comma-separated relative path prefixes to skip |
+| `engines-scope` | `workspace` | How `package.json` engines ranges are compared to pins. `workspace` only compares a range to pins in the same package directory (GitHub workflows belong to the repo root). `all` compares every range to every pin. |
 
 ## Outputs
 
@@ -71,12 +72,16 @@ Errors: Node **major** mismatch between pins; a pin that cannot satisfy the decl
 
 Warnings (do not fail the job): patch-level disagreement, floating tags such as `latest`, unresolved interpolation, a hardcoded `node-version` when a version file is also present.
 
-A CI matrix is not treated as a mismatch against a single Dockerfile. Matrix entries that fall outside a declared engines range still fail.
+A CI matrix is not treated as a mismatch against a single Dockerfile. Matrix entries that fall outside a declared engines range still fail. Values such as `20.x` are treated as the latest release on that line. Trailing YAML comments on workflow pins are ignored.
+
+Directories named `build` are skipped as compile output, except under `docker/` or `dockerfiles/`, so `docker/build/*/Dockerfile` is still scanned.
+
+By default, `engines` ranges are scoped to the workspace that declared them. A nested `docs/package.json` engines field is not compared to the root CI matrix. Set `engines-scope: all` to compare every range to every pin.
 
 ## Honest limits
 
 - Node.js only. Python, Go, a JSON report, and a local CLI are described on the [RuntimeGate site](https://ess2292.github.io/runtimegate/). Checkout is not live.
-- Not a full YAML parser. Unusual workflow matrices or anchors can be missed.
+- Not a full YAML parser. Anchors and generated matrix expressions can be missed. Inline comments and `20.x`-style matrix values are supported.
 - Does not expand Docker `ARG` interpolation.
 - End-of-support dates are a snapshot (10 November 2026) in `src/eol.js`, from the official [Node.js release schedule](https://raw.githubusercontent.com/nodejs/Release/main/schedule.json). Node 20 ended 30 April 2026.
 - This is a consistency gate, not a guarantee that production runs the pinned version.
@@ -98,6 +103,20 @@ The action runs on the `node24` runtime, which GitHub-hosted runners require for
 - [Node 20 is past end of support — find every pin in the repo](https://ess2292.github.io/runtimegate/guides/find-eol-node-pins-after-node-20.html)
 
 Questions and bug reports: [open an issue](https://github.com/ESS2292/runtimegate-action/issues).
+
+## Changelog
+
+### v1.0.1
+
+- Scan Dockerfiles under `docker/build` (directories named `build` are still skipped elsewhere).
+- Strip YAML inline comments from workflow pins and matrix lists (`node-version: "24" # used on Netlify`).
+- Parse GitHub-style `20.x` matrix values (treated as the latest release on that line).
+- Scope `package.json` engines to the workspace that declared them. New `engines-scope` input; default `workspace`. Set `all` for the previous repo-wide comparison.
+- Parse engines ranges with a space after the operator (`">= 20"`).
+
+### v1.0.0
+
+- Initial public release of RuntimeGate Lite.
 
 ## License
 

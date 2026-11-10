@@ -70,6 +70,22 @@ function isIgnored(rel, ignore) {
   return ignore.some((prefix) => norm === prefix || norm.startsWith(prefix + '/'));
 }
 
+/**
+ * Skip compile-output directories, but keep walking a "build" directory
+ * when it lives under docker/ or dockerfiles/ (for example
+ * docker/build/x86_64/Dockerfile).
+ */
+function shouldSkipDir(name, rel) {
+  if (!SKIP_DIRS.has(name)) return false;
+  if (name === 'build' && isDockerContext(rel)) return false;
+  return true;
+}
+
+function isDockerContext(rel) {
+  const parts = String(rel).replace(/\\/g, '/').split('/');
+  return parts.some((part) => part === 'docker' || part === 'dockerfiles');
+}
+
 function scan(root, options = {}) {
   const absRoot = path.resolve(root);
   const langs = normalizeLangs(options.langs);
@@ -166,7 +182,7 @@ function walk(absRoot, dir, ignore, onFile) {
     const rel = path.relative(absRoot, abs) || name;
     if (isIgnored(rel, ignore)) continue;
     if (ent.isDirectory()) {
-      if (SKIP_DIRS.has(name)) continue;
+      if (shouldSkipDir(name, rel)) continue;
       walk(absRoot, path.join(dir, name), ignore, onFile);
       continue;
     }
@@ -206,6 +222,7 @@ function filePin(lang, file, raw, source) {
     minor: pin.minor ?? null,
     patch: pin.patch ?? null,
     alias: pin.alias || null,
+    wildcard: Boolean(pin.wildcard),
     matrix: false,
   };
 }
@@ -351,6 +368,7 @@ function imageToDecl(file, source, image, langs) {
     minor: pin.minor ?? null,
     patch: pin.patch ?? null,
     alias: pin.alias || null,
+    wildcard: Boolean(pin.wildcard),
     matrix: false,
   };
 }
@@ -457,6 +475,7 @@ function parseWorkflow(file, text, langs) {
           minor: pin.minor ?? null,
           patch: pin.patch ?? null,
           alias: pin.alias || null,
+          wildcard: Boolean(pin.wildcard),
           matrix: true,
         });
       }
@@ -474,14 +493,55 @@ function parseWorkflow(file, text, langs) {
       minor: pin.minor ?? null,
       patch: pin.patch ?? null,
       alias: pin.alias || null,
+      wildcard: Boolean(pin.wildcard),
       matrix: false,
     });
   }
   return out;
 }
 
+/**
+ * Strip an unquoted YAML # comment, then surrounding quotes.
+ * `"24" # used on Netlify` becomes 24. A hash inside quotes is kept.
+ */
+function stripInlineYamlComment(s) {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inSingle) {
+      if (c === "'") {
+        if (s[i + 1] === "'") {
+          i += 1;
+          continue;
+        }
+        inSingle = false;
+      }
+      continue;
+    }
+    if (inDouble) {
+      if (c === '\\' && i + 1 < s.length) {
+        i += 1;
+        continue;
+      }
+      if (c === '"') inDouble = false;
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c === '#') return s.slice(0, i).trimEnd();
+  }
+  return s;
+}
+
 function stripYamlScalar(s) {
-  let t = String(s).trim();
+  let t = stripInlineYamlComment(String(s).trim()).trim();
   if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
     t = t.slice(1, -1);
   }
@@ -506,7 +566,7 @@ function extractMatrices(text) {
   const maps = {};
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const inline = lines[i].match(/^\s+([A-Za-z0-9_-]+):\s*\[([^\]]*)\]\s*$/);
+    const inline = lines[i].match(/^\s+([A-Za-z0-9_-]+):\s*\[([^\]]*)\]\s*(?:#.*)?$/);
     if (inline && /node|python|go|version|runtime/i.test(inline[1])) {
       maps[inline[1]] = splitInlineList(inline[2]);
       continue;
@@ -549,4 +609,7 @@ module.exports = {
   parseGoMod,
   parseToolVersions,
   extractMatrices,
+  stripYamlScalar,
+  shouldSkipDir,
+  isDockerContext,
 };
