@@ -104,6 +104,12 @@ The action runs on the `node24` runtime, which GitHub-hosted runners require for
 
 Questions and bug reports: [open an issue](https://github.com/ESS2292/runtimegate-action/issues).
 
+## Related tools
+
+- [RuntimeGate Lite](https://github.com/ESS2292/runtimegate-action) — this Action. Fail the job when Node.js version pins in version files, Docker, and `setup-node` disagree.
+- [EnvGate Lite](https://github.com/ESS2292/envgate-action) — fail the job when a required env var from `.env.example` is missing.
+- [LockGate Lite](https://github.com/ESS2292/lockgate-action) — fail the job when mixed lockfiles are committed or CI runs an unfrozen install.
+
 ## Changelog
 
 ### v1.0.1
@@ -117,10 +123,6 @@ Questions and bug reports: [open an issue](https://github.com/ESS2292/runtimegat
 ### v1.0.0
 
 - Initial public release of RuntimeGate Lite.
-
-## Related
-
-RuntimeGate checks whether runtime version pins agree. For missing environment variables, use the free [EnvGate Lite Action](https://github.com/ESS2292/envgate-action). For mixed lockfiles or an unfrozen install in CI, use the free [LockGate Lite Action](https://github.com/ESS2292/lockgate-action).
 
 ## License
 
