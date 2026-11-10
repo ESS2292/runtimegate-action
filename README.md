@@ -66,13 +66,13 @@ jobs:
 
 ## What it looks at
 
-`.nvmrc`, `.node-version`, `.tool-versions` (Node lines), `package.json` engines / Volta / `devEngines`, `FROM node:…` in Dockerfiles, Compose `image: node:…`, and `actions/setup-node` (`node-version` and `node-version-file`, including a simple matrix).
+`.nvmrc`, `.node-version`, `.tool-versions` (Node lines), `mise.toml` Node tools, `package.json` engines / Volta / `devEngines`, `devcontainer.json` Node images and features, `FROM node:…` in Dockerfiles (including `Dockerfile-CUDA`, `Dockerfile.dev`, and `*.dockerfile`), Compose `image: node:…` (including `compose.test.yml` and `compose.override.yaml`), and `actions/setup-node` (`node-version` and `node-version-file`, including a simple matrix).
 
 Errors: Node **major** mismatch between pins; a pin that cannot satisfy the declared engines range; with `eol: true`, a pin past official end of support.
 
 Warnings (do not fail the job): patch-level disagreement, floating tags such as `latest`, unresolved interpolation, a hardcoded `node-version` when a version file is also present.
 
-A CI matrix is not treated as a mismatch against a single Dockerfile. Matrix entries that fall outside a declared engines range still fail. Values such as `20.x` are treated as the latest release on that line. Trailing YAML comments on workflow pins are ignored.
+A CI matrix is not treated as a mismatch against a single Dockerfile. Matrix entries that fall outside a declared engines range still fail. Values such as `20.x`, and major-only pins such as `node-version: 22`, are treated as the latest release on that line when checking engines ranges. Trailing YAML comments on workflow pins are ignored.
 
 Directories named `build` are skipped as compile output, except under `docker/` or `dockerfiles/`, so `docker/build/*/Dockerfile` is still scanned.
 
@@ -111,6 +111,13 @@ Questions and bug reports: [open an issue](https://github.com/ESS2292/runtimegat
 - [LockGate Lite](https://github.com/ESS2292/lockgate-action) — fail the job when mixed lockfiles are committed or CI runs an unfrozen install.
 
 ## Changelog
+
+### v1.1.0
+
+- Scan Node versions in `mise.toml` and improve `.tool-versions` parsing (comments, asdf fallbacks, `system` / `path:` requests).
+- Scan `devcontainer.json` Node images (`javascript-node`, `typescript-node`) and Node features, including JSONC comments.
+- Recognize Dockerfile name variants (`Dockerfile-CUDA`, `Dockerfile.dev`, `*.dockerfile`) and Compose override / `-f` filenames (`compose.test.yml`, `docker-compose.dev.yaml`).
+- Treat GitHub Actions `node-version: 22` as the latest 22.x when checking `engines` ranges, matching `22.x` and the official setup-node examples.
 
 ### v1.0.1
 

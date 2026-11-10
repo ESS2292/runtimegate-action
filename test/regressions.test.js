@@ -6,7 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { run } = require('../src/main');
-const { scan, parseWorkflow, extractMatrices, stripYamlScalar } = require('../src/scan');
+const { scan, parseWorkflow, extractMatrices, stripYamlScalar, parseToolVersions, parseMiseToml, parseDevcontainer, isLikelyDockerfile, isComposeFile } = require('../src/scan');
+const { analyze } = require('../src/compare');
 const { parseNodePin, pinSatisfiesRange } = require('../src/version');
 const { runCheck } = require('../src/index');
 
@@ -167,6 +168,98 @@ jobs:
       assert.ok(result.findings.some((f) =>
         f.code === 'range-unsatisfied' && /docs\/Dockerfile/.test(f.message)
       ));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('new Node version sources (v1.1.0)', () => {
+  it('matches Dockerfile-CUDA, Dockerfile.dev, and *.dockerfile', () => {
+    assert.equal(isLikelyDockerfile('Dockerfile-CUDA'), true);
+    assert.equal(isLikelyDockerfile('Dockerfile.dev'), true);
+    assert.equal(isLikelyDockerfile('app.dockerfile'), true);
+    assert.equal(isLikelyDockerfile('dockerignore'), false);
+  });
+
+  it('matches compose override and compose.test.yml filenames', () => {
+    assert.equal(isComposeFile('compose.override.yaml'), true);
+    assert.equal(isComposeFile('compose.test.yml'), true);
+    assert.equal(isComposeFile('docker-compose.dev.yaml'), true);
+    assert.equal(isComposeFile('services.yml'), false);
+  });
+
+  it('reads nodejs lines and comments from .tool-versions', () => {
+    const decls = parseToolVersions('.tool-versions', 'nodejs 22.21.1 # comment\nyarn 1.22.19\n', ['node']);
+    assert.equal(decls.length, 1);
+    assert.equal(decls[0].major, 22);
+    assert.equal(decls[0].patch, 1);
+  });
+
+  it('reads node from mise.toml', () => {
+    const decls = parseMiseToml('mise.toml', '[tools]\nnode = "22.22.3"\nyarn = "1"\n', ['node']);
+    assert.equal(decls.length, 1);
+    assert.equal(decls[0].source, 'mise.toml#tools');
+    assert.equal(decls[0].major, 22);
+    assert.equal(decls[0].patch, 3);
+  });
+
+  it('reads a javascript-node devcontainer image and a Node feature from JSONC', () => {
+    const decls = parseDevcontainer('.devcontainer/devcontainer.json', `{
+      // comment
+      "image": "mcr.microsoft.com/devcontainers/javascript-node:22-bookworm",
+      "features": {
+        "ghcr.io/devcontainers/features/node:2": { "version": "22" },
+      }
+    }`, ['node']);
+    assert.equal(decls.length, 2);
+    assert.ok(decls.some((d) => d.source === 'devcontainer.json#image' && d.major === 22));
+    assert.ok(decls.some((d) => d.source === 'devcontainer.json#features' && d.major === 22));
+  });
+
+  it('scans the new filenames together', () => {
+    const dir = makeRepo({
+      '.node-version': '22.11.0\n',
+      'package.json': JSON.stringify({ volta: { node: '22.11.0' }, engines: { node: '>=22' } }),
+      'mise.toml': '[tools]\nnode = "22.11.0"\n',
+      '.tool-versions': 'nodejs 22.11.0\n',
+      'Dockerfile-CUDA': 'FROM node:22.11.0-alpine\n',
+      'compose.test.yml': 'services:\n  app:\n    image: node:22.11.0-alpine\n',
+      '.devcontainer/devcontainer.json': '{ "image": "mcr.microsoft.com/devcontainers/javascript-node:22" }\n',
+    });
+    try {
+      const result = scan(dir, { langs: ['node'] });
+      const sources = result.declarations.map((d) => d.source);
+      assert.ok(sources.includes('.node-version'), sources.join(','));
+      assert.ok(sources.includes('package.json#volta.node'));
+      assert.ok(sources.includes('mise.toml#tools'));
+      assert.ok(sources.includes('.tool-versions'));
+      assert.ok(sources.includes('Dockerfile#FROM'));
+      assert.ok(sources.includes('compose#image'));
+      assert.ok(sources.includes('devcontainer.json#image'));
+      const report = analyze(result);
+      assert.equal(report.ok, true, JSON.stringify(report.findings, null, 2));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats setup-node node-version 22 as the latest 22.x against engines >= 22.21.0', () => {
+    const dir = makeRepo({
+      '.tool-versions': 'nodejs 22.21.1\n',
+      'package.json': JSON.stringify({ engines: { node: '>= 22.21.0' } }),
+      '.github/workflows/ci.yml': `jobs:
+  test:
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+`,
+    });
+    try {
+      const report = analyze(scan(dir, { langs: ['node'] }));
+      assert.equal(report.ok, true, JSON.stringify(report.findings, null, 2));
+      assert.ok(!report.findings.some((f) => f.code === 'range-unsatisfied'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

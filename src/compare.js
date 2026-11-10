@@ -141,7 +141,8 @@ function analyzeLang(lang, decls, { checkEol, now, enginesScope }) {
     p.source === '.node-version' ||
     p.source === '.python-version' ||
     p.source === 'runtime.txt' ||
-    p.source === '.tool-versions'
+    p.source === '.tool-versions' ||
+    p.source === 'mise.toml#tools'
   );
   if (hardcodedCi.length && (localVersionFiles.length || versionFileRefs.length)) {
     findings.push({

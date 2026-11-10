@@ -67,9 +67,28 @@ function parseNumericVersion(input) {
  * lts/* cannot be resolved to a single major without a live schedule lookup,
  * so it is returned as { kind: 'alias', alias }.
  */
+/**
+ * asdf / mise special requests that are not a concrete numeric pin:
+ * system, path:, ref:, prefix:, tag:, branch:, rev:, sub-N:.
+ * https://asdf-vm.com/manage/configuration
+ * https://mise.jdx.dev/dev-tools/versions.html
+ */
+function specialVersionKind(raw) {
+  const t = String(raw == null ? '' : raw).trim();
+  if (!t) return { kind: 'empty', raw: t };
+  const lower = t.toLowerCase();
+  if (lower === 'system') return { kind: 'floating', raw: t, alias: 'system' };
+  if (/^(ref|path|prefix|tag|branch|rev|sub-\d+):/i.test(t)) {
+    return { kind: 'unknown', raw: t };
+  }
+  return null;
+}
+
 function parseNodePin(input) {
   const raw = String(input == null ? '' : input).trim();
   if (!raw) return { kind: 'empty', raw };
+  const special = specialVersionKind(raw);
+  if (special) return special;
   const lower = raw.toLowerCase().replace(/^v/, '');
 
   if (FLOATING_TAGS.has(lower) || lower === 'lts/*' || lower === 'node') {
@@ -90,6 +109,8 @@ function parseNodePin(input) {
 function parsePythonPin(input) {
   const raw = String(input == null ? '' : input).trim();
   if (!raw) return { kind: 'empty', raw };
+  const special = specialVersionKind(raw);
+  if (special) return special;
   // Heroku-style runtime.txt: python-3.12.1
   const heroku = raw.match(/^python-(\d+(?:\.\d+){0,2})$/i);
   const ver = parseNumericVersion(heroku ? heroku[1] : raw);
@@ -102,6 +123,8 @@ function parsePythonPin(input) {
 function parseGoPin(input) {
   const raw = String(input == null ? '' : input).trim();
   if (!raw) return { kind: 'empty', raw };
+  const special = specialVersionKind(raw);
+  if (special) return special;
   // go1.22.5 or 1.22 or 1.22.5
   const cleaned = raw.replace(/^go/i, '');
   const ver = parseNumericVersion(cleaned);
@@ -298,6 +321,7 @@ module.exports = {
   parseNodePin,
   parsePythonPin,
   parseGoPin,
+  specialVersionKind,
   parsePin,
   pinBounds,
   cmp3,

@@ -25,21 +25,44 @@ const SKIP_DIRS = new Set([
 
 const ALL_LANGS = ['node', 'python', 'go'];
 
+/**
+ * Dockerfile filename heuristic. Docker's default name is "Dockerfile";
+ * `docker build -f` and Compose `dockerfile:` accept any path. This matches
+ * common variants: Dockerfile, Dockerfile.dev, Dockerfile-CUDA, dockerfile,
+ * and *.dockerfile (any case).
+ */
 function isLikelyDockerfile(name) {
-  return (
-    name === 'Dockerfile' ||
-    name.startsWith('Dockerfile.') ||
-    name.endsWith('.Dockerfile')
-  );
+  const lower = String(name).toLowerCase();
+  if (lower === 'dockerfile') return true;
+  if (lower.startsWith('dockerfile.') || lower.startsWith('dockerfile-')) return true;
+  if (lower.endsWith('.dockerfile')) return true;
+  return false;
 }
 
+/**
+ * Official Compose default files plus override and -f variants.
+ * https://docs.docker.com/compose/how-tos/multiple-compose-files/merge/
+ */
 function isComposeFile(name) {
-  return (
-    name === 'docker-compose.yml' ||
-    name === 'docker-compose.yaml' ||
-    name === 'compose.yml' ||
-    name === 'compose.yaml'
-  );
+  const lower = String(name).toLowerCase();
+  if (lower === 'docker-compose.yml' || lower === 'docker-compose.yaml') return true;
+  if (lower === 'compose.yml' || lower === 'compose.yaml') return true;
+  const yaml = lower.endsWith('.yml') || lower.endsWith('.yaml');
+  if (!yaml) return false;
+  return lower.startsWith('docker-compose.') || lower.startsWith('compose.');
+}
+
+function isMiseConfig(rel, name) {
+  const lower = String(name).toLowerCase();
+  if (lower === 'mise.toml' || lower === '.mise.toml') return true;
+  const norm = String(rel).replace(/\\/g, '/').toLowerCase();
+  if (norm === '.config/mise.toml' || /(^|\/)\.config\/mise\/(config|mise)\.toml$/.test(norm)) return true;
+  if (/(^|\/)mise\/config\.toml$/.test(norm) || /(^|\/)\.mise\/config\.toml$/.test(norm)) return true;
+  return false;
+}
+
+function isDevcontainerFile(name) {
+  return String(name).toLowerCase() === 'devcontainer.json';
 }
 
 function isWorkflowFile(filePath, name) {
@@ -97,11 +120,13 @@ function scan(root, options = {}) {
     if (!stat.isFile()) return;
     const name = path.basename(abs);
     try {
-      if (langs.includes('node') || langs.includes('python') || langs.includes('go')) {
-        if (name === '.tool-versions') {
-          declarations.push(...parseToolVersions(rel, readText(abs), langs));
-          return;
-        }
+      if (name === '.tool-versions') {
+        declarations.push(...parseToolVersions(rel, readText(abs), langs));
+        return;
+      }
+      if (isMiseConfig(rel, name)) {
+        declarations.push(...parseMiseToml(rel, readText(abs), langs));
+        return;
       }
       if (langs.includes('node')) {
         if (name === '.nvmrc' || name === '.node-version') {
@@ -132,6 +157,10 @@ function scan(root, options = {}) {
           declarations.push(...parseGoMod(rel, readText(abs)));
           return;
         }
+      }
+      if (isDevcontainerFile(name)) {
+        declarations.push(...parseDevcontainer(rel, readText(abs), langs));
+        return;
       }
       if (isLikelyDockerfile(name)) {
         declarations.push(...parseDockerfile(rel, readText(abs), langs));
@@ -227,19 +256,55 @@ function filePin(lang, file, raw, source) {
   };
 }
 
+const TOOL_NAME_TO_LANG = {
+  node: 'node',
+  nodejs: 'node',
+  python: 'python',
+  go: 'go',
+  golang: 'go',
+};
+
+function stripHashComment(line) {
+  const s = String(line);
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inSingle) {
+      if (c === "'") inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (c === '\\' && i + 1 < s.length) {
+        i += 1;
+        continue;
+      }
+      if (c === '"') inDouble = false;
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c === '#') return s.slice(0, i);
+  }
+  return s;
+}
+
 function parseToolVersions(file, text, langs) {
   const out = [];
   for (const line of text.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t || t.startsWith('#')) continue;
-    const m = t.match(/^(nodejs|node|python|golang|go)\s+(\S+)/i);
-    if (!m) continue;
-    const key = m[1].toLowerCase();
-    const lang = key === 'nodejs' || key === 'node' ? 'node'
-      : key === 'python' ? 'python'
-        : 'go';
-    if (!langs.includes(lang)) continue;
-    out.push(filePin(lang, file, m[2], '.tool-versions'));
+    const t = stripHashComment(line).trim();
+    if (!t) continue;
+    const parts = t.split(/\s+/);
+    if (parts.length < 2) continue;
+    const lang = TOOL_NAME_TO_LANG[parts[0].toLowerCase()];
+    if (!lang || !langs.includes(lang)) continue;
+    out.push(filePin(lang, file, parts[1], '.tool-versions'));
   }
   return out;
 }
@@ -321,6 +386,7 @@ function parseGoMod(file, text) {
 }
 
 const IMAGE_LANGS = [
+  { re: /(?:^|\/)(?:javascript-node|typescript-node)$/i, lang: 'node' },
   { re: /(?:^|\/)node$/i, lang: 'node' },
   { re: /(?:^|\/)python$/i, lang: 'python' },
   { re: /(?:^|\/)(?:golang|go)$/i, lang: 'go' },
@@ -375,7 +441,7 @@ function imageToDecl(file, source, image, langs) {
 
 function guessLangFromImage(raw) {
   const lower = raw.toLowerCase();
-  if (/node/.test(lower)) return 'node';
+  if (/javascript-node|typescript-node|node/.test(lower)) return 'node';
   if (/python/.test(lower)) return 'python';
   if (/golang|\bgo[:/]/.test(lower)) return 'go';
   return null;
@@ -404,6 +470,15 @@ function parseCompose(file, text, langs) {
     if (decl) out.push(decl);
   }
   return out;
+}
+
+
+function markActionsLinePin(lang, pin) {
+  if (!pin || (pin.kind !== 'version' && pin.kind !== 'pin')) return pin;
+  if (pin.wildcard) return pin;
+  if (lang === 'node' && pin.minor == null) pin.wildcard = true;
+  else if ((lang === 'python' || lang === 'go') && pin.patch == null) pin.wildcard = true;
+  return pin;
 }
 
 function parseWorkflow(file, text, langs) {
@@ -464,7 +539,7 @@ function parseWorkflow(file, text, langs) {
         continue;
       }
       for (const val of values) {
-        const pin = parsePin(lang, val);
+        const pin = markActionsLinePin(lang, parsePin(lang, val));
         out.push({
           lang,
           kind: pin.kind === 'version' ? 'pin' : pin.kind,
@@ -482,7 +557,7 @@ function parseWorkflow(file, text, langs) {
       continue;
     }
 
-    const pin = parsePin(lang, versionRaw);
+    const pin = markActionsLinePin(lang, parsePin(lang, versionRaw));
     out.push({
       lang,
       kind: pin.kind === 'version' ? 'pin' : pin.kind,
@@ -594,6 +669,213 @@ function splitInlineList(s) {
     .filter(Boolean);
 }
 
+function unquoteTomlKey(s) {
+  let t = String(s).trim();
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+    t = t.slice(1, -1);
+  }
+  return t;
+}
+
+function unquoteTomlString(s) {
+  const t = String(s).trim();
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+function versionFromTomlValue(raw) {
+  const t = String(raw).trim();
+  if (!t) return null;
+  // inline table: { version = "24", os = ["linux"] }
+  if (t.startsWith('{') && t.endsWith('}')) {
+    const m = t.match(/\bversion\s*=\s*(?:"([^"]*)"|'([^']*)'|([^,}\s]+))/);
+    if (!m) return null;
+    return m[1] != null ? m[1] : (m[2] != null ? m[2] : m[3]);
+  }
+  // array of versions: ["24", "22"] — first is primary, like asdf fallbacks
+  if (t.startsWith('[') && t.endsWith(']')) {
+    const inner = t.slice(1, -1);
+    const first = inner.split(',')[0];
+    if (!first) return null;
+    return unquoteTomlString(first);
+  }
+  return unquoteTomlString(t);
+}
+
+function parseTomlAssign(stripped) {
+  const m = stripped.match(/^([A-Za-z0-9_.:\/-]+|"[^"]+"|'[^']+')\s*=\s*(.+)$/);
+  if (!m) return null;
+  return { key: unquoteTomlKey(m[1]), value: m[2].trim() };
+}
+
+function extractMiseTools(text) {
+  const tools = {};
+  let section = null;
+  let toolsSub = null;
+  for (const line of String(text).split(/\r?\n/)) {
+    const stripped = stripHashComment(line).trim();
+    if (!stripped) continue;
+    const hdr = stripped.match(/^\[([^\]]+)\]$/);
+    if (hdr) {
+      const name = hdr[1].trim();
+      if (name === 'tools') {
+        section = 'tools';
+        toolsSub = null;
+      } else if (name.startsWith('tools.')) {
+        section = 'tools-sub';
+        toolsSub = unquoteTomlKey(name.slice('tools.'.length));
+      } else {
+        section = null;
+        toolsSub = null;
+      }
+      continue;
+    }
+    if (section === 'tools') {
+      const kv = parseTomlAssign(stripped);
+      if (!kv) continue;
+      const ver = versionFromTomlValue(kv.value);
+      if (ver != null && ver !== '') tools[kv.key] = ver;
+    } else if (section === 'tools-sub' && toolsSub) {
+      const kv = parseTomlAssign(stripped);
+      if (kv && kv.key === 'version') {
+        const ver = versionFromTomlValue(kv.value);
+        if (ver != null && ver !== '') tools[toolsSub] = ver;
+      }
+    }
+  }
+  return tools;
+}
+
+function parseMiseToml(file, text, langs) {
+  const out = [];
+  const tools = extractMiseTools(text);
+  for (const [name, raw] of Object.entries(tools)) {
+    const lang = TOOL_NAME_TO_LANG[String(name).toLowerCase()];
+    if (!lang || !langs.includes(lang)) continue;
+    out.push(filePin(lang, file, String(raw), 'mise.toml#tools'));
+  }
+  return out;
+}
+
+function stripJsonc(text) {
+  const s = String(text);
+  let out = '';
+  let i = 0;
+  let inStr = false;
+  let escape = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (inStr) {
+      out += c;
+      if (escape) escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === '"') inStr = false;
+      i += 1;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+      i += 1;
+      continue;
+    }
+    if (c === '/' && s[i + 1] === '/') {
+      i += 2;
+      while (i < s.length && s[i] !== '\n') i += 1;
+      continue;
+    }
+    if (c === '/' && s[i + 1] === '*') {
+      i += 2;
+      while (i + 1 < s.length && !(s[i] === '*' && s[i + 1] === '/')) i += 1;
+      i += 2;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  // Remove trailing commas outside strings.
+  let cleaned = '';
+  inStr = false;
+  escape = false;
+  for (let j = 0; j < out.length; j++) {
+    const c = out[j];
+    if (inStr) {
+      cleaned += c;
+      if (escape) escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      cleaned += c;
+      continue;
+    }
+    if (c === ',') {
+      let k = j + 1;
+      while (k < out.length && /[\s]/.test(out[k])) k += 1;
+      if (out[k] === '}' || out[k] === ']') continue;
+    }
+    cleaned += c;
+  }
+  return cleaned;
+}
+
+function featureLang(featureId) {
+  const path = String(featureId).toLowerCase().split(':')[0];
+  if (/(^|\/)node$/.test(path)) return 'node';
+  if (/(^|\/)python$/.test(path)) return 'python';
+  if (/(^|\/)(?:go|golang)$/.test(path)) return 'go';
+  if (/(^|\/)rust$/.test(path)) return 'rust';
+  return null;
+}
+
+/**
+ * devcontainer.json `image` and `features` language versions.
+ * Feature IDs such as ghcr.io/devcontainers/features/node:1 are the
+ * feature package version; the language pin is options.version
+ * (Node defaults to "lts" when omitted; Python defaults to "os-provided").
+ * https://github.com/devcontainers/spec/blob/main/docs/specs/devcontainer-features.md
+ * https://github.com/devcontainers/features/blob/main/src/node/README.md
+ */
+function parseDevcontainer(file, text, langs) {
+  const out = [];
+  let json;
+  try {
+    json = JSON.parse(stripJsonc(text));
+  } catch (err) {
+    throw new Error(`Invalid JSONC in ${file}: ${err.message}`);
+  }
+  if (!json || typeof json !== 'object') return out;
+
+  if (json.image) {
+    const decl = imageToDecl(file, 'devcontainer.json#image', json.image, langs);
+    if (decl) out.push(decl);
+  }
+
+  const features = json.features;
+  if (features && typeof features === 'object' && !Array.isArray(features)) {
+    for (const [id, options] of Object.entries(features)) {
+      const lang = featureLang(id);
+      if (!lang || !langs.includes(lang)) continue;
+      let raw;
+      if (options && typeof options === 'object' && options.version != null && options.version !== '') {
+        raw = String(options.version);
+      } else if (lang === 'node') {
+        raw = 'lts';
+      } else if (lang === 'python') {
+        raw = 'os-provided';
+      } else {
+        raw = 'latest';
+      }
+      out.push(filePin(lang, file, raw, 'devcontainer.json#features'));
+    }
+  }
+  return out;
+}
+
 module.exports = {
   scan,
   normalizeLangs,
@@ -605,9 +887,14 @@ module.exports = {
   parseDockerfile,
   parseCompose,
   parsePackageJson,
+  parseToolVersions,
+  parseMiseToml,
+  parseDevcontainer,
+  isLikelyDockerfile,
+  isComposeFile,
+  isMiseConfig,
   parsePyproject,
   parseGoMod,
-  parseToolVersions,
   extractMatrices,
   stripYamlScalar,
   shouldSkipDir,
