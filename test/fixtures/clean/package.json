@@ -1,0 +1,1 @@
+{ "name": "clean-fixture", "private": true, "engines": { "node": ">=22 <23" } }

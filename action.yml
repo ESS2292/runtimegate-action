@@ -1,0 +1,31 @@
+name: "RuntimeGate Lite: Node version drift"
+description: "Fail the job when Node.js version pins in version files, package manifests, Dockerfiles, Compose, and setup-node steps disagree. Zero dependencies."
+author: "Emilio Straubel"
+branding:
+  icon: "git-branch"
+  color: "blue"
+inputs:
+  root:
+    description: "Project directory to scan, relative to the workspace (default: the workspace root)."
+    required: false
+    default: "."
+  eol:
+    description: "If 'true', also fail when a Node.js pin is past official end of support. Uses vendored dates; no network call."
+    required: false
+    default: "false"
+  ignore:
+    description: "Comma-separated relative path prefixes to skip (for example 'examples,docs/fixtures')."
+    required: false
+    default: ""
+outputs:
+  ok:
+    description: "'true' if the check passed, otherwise 'false'."
+  errors:
+    description: "Number of error findings."
+  warnings:
+    description: "Number of warning findings."
+  codes:
+    description: "Comma-separated error codes (for example major-mismatch,range-unsatisfied). Empty when there are no errors."
+runs:
+  using: "node24"
+  main: "src/main.js"

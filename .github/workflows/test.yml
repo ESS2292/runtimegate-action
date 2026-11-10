@@ -1,0 +1,51 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - run: node --test
+
+  self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pass case (clean fixture)
+        id: pass
+        uses: ./
+        with:
+          root: test/fixtures/clean
+
+      - name: Fail case (drift fixture) - expected to fail
+        id: drift
+        continue-on-error: true
+        uses: ./
+        with:
+          root: test/fixtures/drift
+
+      - name: Assert outcomes
+        env:
+          PASS_OK: ${{ steps.pass.outputs.ok }}
+          DRIFT_OUTCOME: ${{ steps.drift.outcome }}
+          DRIFT_OK: ${{ steps.drift.outputs.ok }}
+          DRIFT_CODES: ${{ steps.drift.outputs.codes }}
+        run: |
+          test "$PASS_OK" = "true"
+          test "$DRIFT_OUTCOME" = "failure"
+          test "$DRIFT_OK" = "false"
+          echo "$DRIFT_CODES" | grep -q "major-mismatch"
+          echo "Self-test behaved as expected."

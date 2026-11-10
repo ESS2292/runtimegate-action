@@ -1,0 +1,15 @@
+{
+  "name": "runtimegate-action",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Free GitHub Action: fail CI when Node.js version pins in version files, Docker, and workflows disagree. Zero dependencies. Lite version of RuntimeGate.",
+  "main": "src/main.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Emilio Straubel",
+  "license": "MIT"
+}
